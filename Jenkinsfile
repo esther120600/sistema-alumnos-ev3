@@ -1,7 +1,7 @@
 // Jenkinsfile - Pipeline de "Sistema Alumnos" (SecureDev · Evaluación Parcial 3 · OCY1102)
 //
-// Esta es la versión BASE: construye, prueba y despliega en producción.
-// Los marcadores  >>> [ETIQUETA]  indican dónde agregar las etapas de seguridad.
+// Etapas: Build -> Test -> Security Review (SAST) -> Dependency Management -> Deploy Producción.
+// Los marcadores  >>> [ETIQUETA]  indican dónde se agregarán las etapas siguientes.
 pipeline {
     agent any
 
@@ -49,7 +49,32 @@ pipeline {
             }
         }
 
-        // >>> [SEGURIDAD]: aquí van las etapas "Security Review (SAST)" y "Dependency Management"
+        // Revisión de seguridad continua del CÓDIGO (SAST) con Bandit
+        stage('Security Review (SAST)') {
+            steps {
+                // Reportes completos (todas las severidades) para la trazabilidad
+                sh 'bandit -r app.py -f json -o reports/bandit.json || true'
+                sh 'bandit -r app.py -f txt -o reports/bandit.txt || true'
+                sh 'cat reports/bandit.txt'
+                // Si hay hallazgos Medium o High, el build queda UNSTABLE (amarillo)
+                catchError(buildResult: 'UNSTABLE', stageResult: 'UNSTABLE') {
+                    sh 'bandit -q -ll -r app.py'
+                }
+            }
+        }
+
+        // Gestión de DEPENDENCIAS (SCA) con pip-audit
+        stage('Dependency Management') {
+            steps {
+                sh 'pip-audit -r requirements.txt -f json -o reports/pip-audit.json || true'
+                sh 'pip-audit -r requirements.txt -o reports/pip-audit.txt || true'
+                sh 'cat reports/pip-audit.txt'
+                // Si hay dependencias con vulnerabilidades conocidas, el build queda UNSTABLE
+                catchError(buildResult: 'UNSTABLE', stageResult: 'UNSTABLE') {
+                    sh 'pip-audit -r requirements.txt'
+                }
+            }
+        }
 
         // >>> [ZAP]: aquí van las etapas "Deploy Staging" y "DAST - OWASP ZAP"
 
