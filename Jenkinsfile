@@ -76,7 +76,22 @@ pipeline {
             }
         }
 
-        // >>> [ZAP]: aquí van las etapas "Deploy Staging" y "DAST - OWASP ZAP"
+        // Se despliega una copia en STAGING (puerto 5001) para atacarla con ZAP sin tocar producción
+        stage('Deploy Staging') {
+            steps {
+                sh 'bash scripts/deploy.sh staging 5001'
+            }
+        }
+
+        // Pruebas dinámicas (DAST) con OWASP ZAP: spider + escaneo pasivo + escaneo activo
+        stage('DAST - OWASP ZAP') {
+            steps {
+                // ZAP corre en su propio contenedor y alcanza la app de staging por la red interna
+                catchError(buildResult: 'UNSTABLE', stageResult: 'UNSTABLE') {
+                    sh 'python3 scripts/zap_scan.py http://jenkins:5001'
+                }
+            }
+        }
 
         stage('Deploy Producción') {
             // >>> [GATE]: aquí va la condición "when" que protege producción
