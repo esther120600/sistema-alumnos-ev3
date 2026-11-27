@@ -246,4 +246,6 @@ def metrics():
 iniciar_db()
 
 if __name__ == "__main__":
-    app.run(host="0.0.0.0", port=5000, debug=True)
+    # Solo para desarrollo local: depurador apagado salvo FLASK_DEBUG=1 y solo escucha en la máquina local.
+    # En los despliegues la app la sirve gunicorn (scripts/deploy.sh).
+    app.run(host="127.0.0.1", port=5000, debug=os.environ.get("FLASK_DEBUG") == "1")
