@@ -68,6 +68,8 @@ pipeline {
             steps {
                 sh 'pip-audit -r requirements.txt -f json -o reports/pip-audit.json || true'
                 sh 'pip-audit -r requirements.txt -o reports/pip-audit.txt || true'
+                // pip-audit no crea el .txt cuando no hay vulnerabilidades: se deja constancia igualmente
+                sh '[ -s reports/pip-audit.txt ] || echo "No known vulnerabilities found" > reports/pip-audit.txt'
                 sh 'cat reports/pip-audit.txt'
                 // Si hay dependencias con vulnerabilidades conocidas, el build queda UNSTABLE
                 catchError(buildResult: 'UNSTABLE', stageResult: 'UNSTABLE') {
@@ -94,7 +96,10 @@ pipeline {
         }
 
         stage('Deploy Producción') {
-            // >>> [GATE]: aquí va la condición "when" que protege producción
+            // GATE: producción solo se despliega si TODO el pipeline (pruebas, SAST, SCA y DAST) quedó en verde
+            when {
+                expression { currentBuild.currentResult == 'SUCCESS' }
+            }
             steps {
                 sh 'bash scripts/deploy.sh produccion 5000'
                 script { env.PRODUCCION = env.APP_VERSION }
