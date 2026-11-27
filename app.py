@@ -5,13 +5,15 @@
 Además de las rutas de negocio, la app publica métricas para Prometheus en /metrics.
 Las métricas de seguridad (logins fallidos y peticiones sospechosas) se ven en Grafana.
 """
+import hmac
 import os
 import re
 import secrets
 import sqlite3
+import threading
 import time
 
-from flask import Flask, Response, g, jsonify, render_template_string, request
+from flask import Flask, Response, g, jsonify, render_template_string, request, session
 from prometheus_client import CONTENT_TYPE_LATEST, Counter, Gauge, Histogram, generate_latest
 from werkzeug.security import check_password_hash, generate_password_hash
 
@@ -25,6 +27,14 @@ ADMIN_USUARIO = os.environ.get("ADMIN_USUARIO", "admin")
 ## Si no se define, se genera una clave aleatoria que nadie conoce: el acceso de administrador queda cerrado.
 ADMIN_CLAVE_HASH = os.environ.get("ADMIN_CLAVE_HASH") or generate_password_hash(secrets.token_urlsafe(24))
 app.config["SECRET_KEY"] = SECRET_KEY
+app.config["SESSION_COOKIE_HTTPONLY"] = True
+app.config["SESSION_COOKIE_SAMESITE"] = "Lax"
+
+## Límite de intentos de login fallidos por dirección (frena la fuerza bruta).
+LIMITE_INTENTOS = 5
+VENTANA_SEGUNDOS = 60
+INTENTOS_FALLIDOS = {}
+CANDADO_INTENTOS = threading.Lock()
 
 ## Versión desplegada: la inyecta el pipeline (1.0.<build>+<commit>). Sirve para la trazabilidad.
 VERSION = os.environ.get("APP_VERSION", "dev")
@@ -71,6 +81,7 @@ PORTADA = """<!doctype html>
 </form>
 <h2>Acceso administrador</h2>
 <form action="/login" method="post">
+  <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
   <input name="usuario" value="admin"> <input name="clave" type="password" value="">
   <button type="submit">Entrar</button>
 </form>
@@ -145,7 +156,10 @@ def portada():
     @brief Portada HTML con enlaces y formularios del sistema.
     @return Página HTML.
     """
-    return render_template_string(PORTADA, version=VERSION)
+    # Token anti-CSRF ligado a la sesión del navegador; /login lo exige
+    if "csrf" not in session:
+        session["csrf"] = secrets.token_hex(16)
+    return render_template_string(PORTADA, version=VERSION, csrf_token=session["csrf"])
 
 
 @app.route("/hello")
@@ -219,17 +233,47 @@ def buscar_alumnos():
     return jsonify([dict(f) for f in filas])
 
 
+def demasiados_intentos(ip):
+    """!
+    @brief Indica si una dirección superó el límite de logins fallidos en la ventana de tiempo.
+    @param ip Dirección del cliente.
+    @return True si debe bloquearse temporalmente.
+    """
+    ahora = time.monotonic()
+    with CANDADO_INTENTOS:
+        recientes = [t for t in INTENTOS_FALLIDOS.get(ip, []) if ahora - t < VENTANA_SEGUNDOS]
+        INTENTOS_FALLIDOS[ip] = recientes
+        return len(recientes) >= LIMITE_INTENTOS
+
+
+def registrar_fallo(ip):
+    """!
+    @brief Anota un login fallido de la dirección.
+    @param ip Dirección del cliente.
+    """
+    with CANDADO_INTENTOS:
+        INTENTOS_FALLIDOS.setdefault(ip, []).append(time.monotonic())
+
+
 @app.route("/login", methods=["POST"])
 def login():
     """!
     @brief Valida las credenciales del administrador enviadas por formulario.
     @return JSON con el resultado; 401 si las credenciales no son válidas.
     """
+    ip = request.remote_addr
+    if demasiados_intentos(ip):
+        SOSPECHOSAS.labels(tipo="fuerza_bruta").inc()
+        app.logger.warning("Login bloqueado por demasiados intentos desde %s", ip)
+        return jsonify({"error": "Demasiados intentos. Espera un minuto."}), 429
+    if not hmac.compare_digest(session.get("csrf", "").encode(), request.form.get("csrf_token", "").encode()):
+        return jsonify({"error": "Solicitud no válida"}), 400
     usuario = request.form.get("usuario", "")
     clave = request.form.get("clave", "")
     if usuario == ADMIN_USUARIO and check_password_hash(ADMIN_CLAVE_HASH, clave):
         LOGIN_EXITOSOS.inc()
         return jsonify({"mensaje": "Bienvenido, administrador"})
+    registrar_fallo(ip)
     LOGIN_FALLIDOS.inc()
     app.logger.warning("Login fallido para el usuario '%s' desde %s", usuario, request.remote_addr)
     return jsonify({"error": "Credenciales inválidas"}), 401
