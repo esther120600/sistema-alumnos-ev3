@@ -64,6 +64,18 @@ PATRONES_ATAQUE = {
     "path_traversal": re.compile(r"\.\./|\.\.\\|%2e%2e", re.I),
 }
 
+## Cabeceras de seguridad que se agregan a todas las respuestas.
+CABECERAS_SEGURIDAD = {
+    "X-Content-Type-Options": "nosniff",
+    "X-Frame-Options": "DENY",
+    "Content-Security-Policy": "default-src 'self'; frame-ancestors 'none'; form-action 'self'; base-uri 'none'",
+    "Referrer-Policy": "no-referrer",
+    "Permissions-Policy": "geolocation=(), microphone=(), camera=()",
+    "Cross-Origin-Opener-Policy": "same-origin",
+    "Cross-Origin-Resource-Policy": "same-origin",
+    "Cache-Control": "no-store",
+}
+
 PORTADA = """<!doctype html>
 <html lang="es">
 <head><meta charset="utf-8"><title>Sistema Alumnos</title></head>
@@ -147,6 +159,8 @@ def despues_de_la_peticion(respuesta):
     if endpoint != "/metrics":
         HTTP_PETICIONES.labels(request.method, endpoint, str(respuesta.status_code)).inc()
         HTTP_LATENCIA.labels(endpoint).observe(time.perf_counter() - g.get("inicio", time.perf_counter()))
+    for nombre, valor in CABECERAS_SEGURIDAD.items():
+        respuesta.headers[nombre] = valor
     return respuesta
 
 
