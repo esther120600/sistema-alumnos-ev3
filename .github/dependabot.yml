@@ -1,0 +1,11 @@
+# Dependabot: revisa cada día las dependencias de Python y abre un Pull Request
+# cuando existe una versión más nueva o una corrección de seguridad.
+version: 2
+updates:
+  - package-ecosystem: "pip"
+    directory: "/"
+    schedule:
+      interval: "daily"
+    open-pull-requests-limit: 10
+    commit-message:
+      prefix: "deps"
